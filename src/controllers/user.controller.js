@@ -441,6 +441,61 @@ const getUserChannelProfile = requesthandler(async (req, res) => {
         .json(new ApiResponse(200, channel[0], "Channel profile retrieved successfully"))
 })
 
+const getUserWatchHistory = requesthandler(async (req, res) => {
+    const User = await user.aggregate([
+        {
+            // why didn't we use _id: req.user._id because _id is an ObjectId and req.user._id is a string so we need to convert it to ObjectId
+            $match: { _id: new mongoose.Types.ObjectId(req.user._id) }
+        },
+        {
+            $lookup: {
+                from: "videos",
+                localField: "watchHistory",
+                foreignField: "_id",
+                as: "watchHistory",
+                //why we use nested lookup ?
+                // because we want to get the owner of the video and we want to get the owner of the video from the user collection so we need to use nested lookup
+                pipeline: [
+                    {
+                        $lookup: {
+                            from: "users",
+                            localField: "owner",
+                            foreignField: "_id",
+                            as: "owner",
+                            //why we use here nested pipeline ?
+                            // because we want to get only the required fields from the owner of the video and we want to get only the _id, username and email of the owner of the video so we need to use nested pipeline
+                            //what if we don't use nested pipeline ?
+                            // if we don't use nested pipeline then we will get all the fields of the owner of the video and we don't want that so we need to use nested pipeline
+                            pipeline: [
+                                {
+                                    $project: {
+                                        _id: 1,
+                                        username: 1,
+                                        email: 1
+                                    }
+                                }
+                            ]
+
+                        }
+                    },
+                    {
+                        $addFields: {
+                            owner: { $arrayElemAt: ["$owner", 0] }
+                        }
+                    }
+                ]
+            }
+        }
+    ])
+
+    if (!User) {
+        throw new ApiError(404, "User not found")
+    }
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, User[0].watchHistory, "User watch history retrieved successfully"))
+})
 
 export { registerUser,
     loginUser,
@@ -451,5 +506,6 @@ export { registerUser,
     updateUserProfile,
     uploadUserAvatar,
     uploadUserCoverImage,
-    getUserChannelProfile
+    getUserChannelProfile,
+    getUserWatchHistory
  };

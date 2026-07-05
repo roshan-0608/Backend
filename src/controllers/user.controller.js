@@ -272,12 +272,184 @@ const refreshAccessToken = requesthandler(async (req, res) => {
     } catch (error) {
         throw new ApiError(401, error?.message || "Invalid refresh token")
     }
+})
 
+const changePassword = requesthandler(async (req, res) => {
+    const {oldPassword, newPassword} = req.body
+
+    const User = await user.findById(req.user._id)
+    const isPasswordCorrect = await User.isPasswordCorrect(oldPassword)
+
+    if (!isPasswordCorrect) {
+        throw new ApiError(400, "Invalid old password")
+    }
+
+    User.password = newPassword
+    await User.save({ validateBeforeSave: false })
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, {}, "Password updated successfully"))
+})
+
+const getUserProfile = requesthandler(async (req, res) => {
+    const User = await user.findById(req.user._id).select("-password -refreshToken")
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, User, "User profile retrieved successfully"))
+})
+
+const updateUserProfile = requesthandler(async (req, res) => {
+    const { fullName, email, username } = req.body;
+    const fields = [fullName, email, username];
+
+    const User = await user.findById(req.user._id)
+
+    if (!User) {
+        throw new ApiError(404, "User not found")
+    }
+
+    // Update the user's profile fields
+    fields.forEach(field => {
+        if (req.body[field] !== undefined) {
+            User[field] = req.body[field]
+        }
+    })
+
+    await User.save()
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, User, "Profile updated successfully"))
+})
+
+const uploadUserAvatar = requesthandler(async (req, res) => {
+    const avatarLocalPath = req.files?.avatar[0]?.path;
+
+    if (!avatarLocalPath) {
+        throw new ApiError(400, "Avatar file is required")
+    }
+
+    const avatar = await uploadOnCloudinary(avatarLocalPath)
+
+    if (!avatar.url) {
+        throw new ApiError(400, "Error while uploading avatar")
+    }
+
+    const User = await user.findById(req.user._id)
+    User.avatar = avatar.url
+    await User.save()
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, User, "Avatar updated successfully"))
+})
+
+const uploadUserCoverImage = requesthandler(async (req, res) => {
+    const coverImageLocalPath = req.files?.coverimage[0]?.path;
+
+    if (!coverImageLocalPath) {
+        throw new ApiError(400, "Cover image file is required")
+    }
+
+    const coverImage = await uploadOnCloudinary(coverImageLocalPath)
+
+    if (!coverImage.url) {
+        throw new ApiError(400, "Error while uploading cover image")
+    }
+
+    const User = await user.findById(req.user._id)
+    User.coverImage = coverImage.url
+    await User.save()
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, User, "Cover image updated successfully"))
+})
+
+const getUserChannelProfile = requesthandler(async (req, res) => {
+    const { username } = req.params;
+    if(!username?.trim()){
+        throw new ApiError(400, "Username is required")
+    }
+
+    // aggregate returns an array of objects
+    const channel = await user.aggregate([
+        {
+            // matches the user document with the provided username, 
+            // converting it to lowercase for case-insensitive matching. 
+            // This ensures that the query retrieves the correct user profile based on the username parameter from the request.
+            $match: { username: username.toLowerCase() }
+        },
+        {
+            // lookup --> joins the user document with the subscriptions collection
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id", // this is the field in the user collection that will be matched with the foreignField in the subscriptions collection
+                foreignField: "channel",
+                as: "subscribers"
+            }
+        },
+        {
+            $lookup: {
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "userId",
+                as: "subscribedTo"
+            }
+        },
+        {
+            // adds new fields to the user document, including subscriberCount, subscribedToCount, and isSubscribed.
+            // subscriberCount is calculated as the size of the subscribers array, 
+            // subscribedToCount is calculated as the size of the subscribedTo array, 
+            // and isSubscribed is determined based on whether the current user's ID (req.user._id) is present in the subscribers array.
+            $addFields: {
+                subscriberCount: { $size: "$subscribers" },
+                subscribedToCount: { $size: "$subscribedTo" },
+                isSubscribed: {
+                    $cond: {
+                        if: { $in: [req.user._id, "$subscribers.userId"] },
+                        then: true,
+                        else: false
+                    }
+                }
+            }
+        },
+        {   
+            // project --> specifies which fields to include or exclude in the final output.
+            // In this case, it excludes the password and refreshToken fields from the user document, 
+            // ensuring that sensitive information is not included in the response.
+            $project: {
+                password: 0,
+                refreshToken: 0,
+            }
+        }
+    ])
+
+    // 0 ----> false,
+    // any other number ----> true
+    // channel?.length === if(channel && channel.length > 0) return true else false
+    if (!channel?.length) {
+        throw new ApiError(404, "Channel not found")
+    }
+
+    return res
+        .status(200)
+        // why channel[0] because aggregate returns an array of objects and 
+        // because we are matching the username which is unique so it will return only one object in the array so we are returning channel[0] which is the first object in the array
+        .json(new ApiResponse(200, channel[0], "Channel profile retrieved successfully"))
 })
 
 
 export { registerUser,
     loginUser,
     logoutUser,
-    refreshAccessToken
+    refreshAccessToken,
+    changePassword,
+    getUserProfile,
+    updateUserProfile,
+    uploadUserAvatar,
+    uploadUserCoverImage,
+    getUserChannelProfile
  };
